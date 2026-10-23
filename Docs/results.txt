@@ -1,0 +1,51 @@
+# 自测结果（Tools/iterate.ps1，RTX 3060，1600×900，-benchmark -fps=60）
+# 检查项
+PASS cloudscape built in 3.4 s (shape 459 ms, EDT 252, envelope 317, encode 1839, noise 301); occupancy voxel 0.061 envelope 0.073
+PASS sdf_conservative texels above the true distance: BC1 safe 0, BC4 log 0, BC1 nearest 6405813; mean under-estimate BC1 2.25 m BC4 1.80 m
+PASS tunnel_representation tunnel centre: voxel density 0.000 (19 m to the cloud wall), envelope density 0.982
+PASS rings_in_clear_air 13 of 13 rings have clear air around them
+PASS icing ice 1.00 after 3 s in cloud (density at plane 0.55)
+PASS course_flown autopilot passed 13 of 13 rings, state 3, time 74.9 s, crashes 0
+
+# GPU 耗时：每项取 30 帧平均。机器上同时开着其他程序，数字会随后台负载波动
+PERF start_default light 0.600 near 0.056 far 1.011 composite 0.203 total 1.870 ms
+PERF tunnel_voxel light 0.669 near 0.072 far 2.561 composite 0.219 total 3.520 ms
+PERF in_tunnel_split light 0.740 near 1.828 far 2.987 composite 0.381 total 5.936 ms
+PERF in_tunnel_half light 0.660 near 0.001 far 7.790 composite 0.273 total 8.723 ms
+PERF in_tunnel_full light 0.497 near 0.001 far 21.582 composite 0.088 total 22.167 ms
+PERF between_sdf light 0.551 near 0.518 far 1.277 composite 0.210 total 2.556 ms
+PERF between_nosdf light 0.585 near 0.001 far 3.263 composite 0.143 total 3.992 ms
+PERF between_lightmarch light 0.547 near 0.635 far 2.251 composite 0.203 total 3.636 ms
+PERF cave light 0.593 near 0.599 far 3.088 composite 0.234 total 4.514 ms
+PERF evening_rebuild_settled light 0.688 near 0.100 far 1.716 composite 0.306 total 2.810 ms
+PERF far/base_2p5d_step_lightmarch_half light 0.549 near 0.001 far 1.177 composite 0.133 total 1.860 ms
+PERF far/plus_lightgrid light 0.665 near 0.001 far 1.119 composite 0.161 total 1.945 ms
+PERF far/adaptive_step light 0.857 near 0.001 far 3.422 composite 0.215 total 4.494 ms
+PERF far/plus_sdf_bc1 light 0.602 near 0.001 far 0.970 composite 0.142 total 1.715 ms
+PERF far/plus_split light 0.571 near 0.071 far 0.911 composite 0.214 total 1.767 ms
+PERF far/split_sdf_r16 light 0.589 near 0.083 far 0.864 composite 0.222 total 1.758 ms
+PERF far/split_sdf_bc4log light 0.527 near 0.057 far 0.933 composite 0.260 total 1.777 ms
+PERF far/split_noise_mip0 light 0.578 near 0.057 far 3.288 composite 0.215 total 4.138 ms
+PERF far/split_lightmarch light 0.883 near 0.119 far 2.638 composite 0.208 total 3.847 ms
+PERF far/full_res light 0.594 near 0.001 far 2.501 composite 0.097 total 3.193 ms
+PERF between/base_2p5d_step_lightmarch_half light 0.531 near 0.001 far 1.649 composite 0.136 total 2.317 ms
+PERF between/plus_lightgrid light 0.566 near 0.001 far 1.280 composite 0.143 total 1.990 ms
+PERF between/adaptive_step light 0.552 near 0.001 far 3.662 composite 0.134 total 4.348 ms
+PERF between/plus_sdf_bc1 light 0.708 near 0.001 far 2.716 composite 0.217 total 3.641 ms
+PERF between/plus_split light 0.561 near 0.560 far 1.219 composite 0.222 total 2.561 ms
+PERF between/split_sdf_r16 light 0.693 near 0.668 far 1.638 composite 0.221 total 3.220 ms
+PERF between/split_sdf_bc4log light 0.507 near 0.516 far 1.234 composite 0.224 total 2.481 ms
+PERF between/split_noise_mip0 light 0.592 near 0.418 far 3.357 composite 0.215 total 4.582 ms
+PERF between/split_lightmarch light 0.626 near 0.759 far 2.879 composite 0.222 total 4.487 ms
+PERF between/full_res light 0.621 near 0.001 far 7.878 composite 0.083 total 8.583 ms
+PERF inside/base_2p5d_step_lightmarch_half light 0.630 near 0.001 far 4.089 composite 0.147 total 4.866 ms
+PERF inside/plus_lightgrid light 0.713 near 0.001 far 2.372 composite 0.147 total 3.232 ms
+PERF inside/adaptive_step light 0.629 near 0.001 far 6.298 composite 0.128 total 7.055 ms
+PERF inside/plus_sdf_bc1 light 0.647 near 0.001 far 7.075 composite 0.236 total 7.959 ms
+PERF inside/plus_split light 0.680 near 1.784 far 2.839 composite 0.298 total 5.600 ms
+PERF inside/split_sdf_r16 light 0.645 near 1.674 far 2.642 composite 0.325 total 5.285 ms
+PERF inside/split_sdf_bc4log light 0.592 near 1.674 far 2.694 composite 0.221 total 5.181 ms
+PERF inside/split_noise_mip0 light 0.568 near 1.022 far 4.190 composite 0.230 total 6.009 ms
+PERF inside/split_lightmarch light 0.503 near 3.296 far 4.266 composite 0.217 total 8.282 ms
+PERF inside/full_res light 0.533 near 0.001 far 20.973 composite 0.103 total 21.610 ms
+PERF autopilot_30s light 0.603 near 1.401 far 2.030 composite 0.256 total 4.290 ms

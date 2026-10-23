@@ -1,0 +1,365 @@
+// Nubis^3-style voxel clouds: light grid, ray march and composite.
+// Inside the shader every position is in domain metres: (translated world - DomainMinTW) / 100. The noise is
+// sampled at those metres plus the wind offset, so it is anchored to the world and never slides with the camera.
+
+#include "/Engine/Private/Common.ush"
+
+#define NX 512
+#define NY 512
+#define NZ 64
+#define SDF_LO -256.0
+#define SDF_HI 4096.0
+#define MAX_FLASHES 4
+
+// ---------------------------------------------------------------- shared parameters
+float3 DomainMinTW;			// translated world cm of voxel (0,0,0)'s corner
+float3 DomainM;				// domain size in metres (4096, 4096, 512)
+float VoxelM;				// 8
+float3 SunDir;				// towards the sun
+float3 SunColor;
+float3 SkyColor;
+float3 HazeColor;
+float HazeKm;
+float3 WindM;
+uint FrameIndex;
+uint StepMode;				// 0 legacy distance-based, 1 adaptive
+uint SdfSkip;
+uint SdfFormat;				// 0 R16, 1 BC1 safe, 2 BC1 naive, 3 BC4 log
+uint MaxSteps;
+uint Detail;				// 0 profile, 1 up-rez, 2 up-rez + near folded noise
+uint NoiseMipByDistance;
+uint LightMode;				// 0 light march, 1 light grid
+uint MultiScatter;
+uint Ambient;
+uint AmbientDirectional;
+uint Lightning;
+uint DebugView;
+float DensityMul;
+uint NumFlashes;
+float4 FlashP[MAX_FLASHES];	// domain metres, radius m
+float4 FlashI[MAX_FLASHES];	// intensity
+
+Texture3D<float4> Modeling;
+Texture3D<float> SdfR16;
+Texture3D<float4> SdfBC1;
+Texture3D<float> SdfBC4;
+Texture3D<float4> NoiseTex;
+Texture3D<float2> LightGrid;
+SamplerState LinearClamp;
+SamplerState LinearWrap;
+
+static const float EXT = 0.05;		// extinction per metre at density 1
+
+// ---------------------------------------------------------------- helpers (names follow the talk's code)
+float ValueRemap(float V, float A, float B, float C, float D) { return C + saturate((V - A) / (B - A)) * (D - C); }
+float ValueErosion(float V, float OldMin) { return saturate((V - OldMin) / max(1.0 - OldMin, 1e-4)); }
+float Frac01(float V, float A, float B) { return saturate((V - A) / (B - A)); }
+
+float3 ToUVW(float3 P) { return P / DomainM; }
+
+float SdfFromR16(float3 UVW) { return SDF_LO + SdfR16.SampleLevel(LinearClamp, UVW, 0) * (SDF_HI - SDF_LO); }
+
+// Distance to the nearest cloud in metres (lower bound when the encoding is conservative).
+float GetSdf(float3 P)
+{
+	const float3 UVW = ToUVW(P);
+	if (SdfFormat == 1 || SdfFormat == 2)
+		return SDF_LO + dot(SdfBC1.SampleLevel(LinearClamp, UVW, 0).rgb, float3(1.0, 0.03529415, 0.00069204)) * (SDF_HI - SDF_LO);
+	if (SdfFormat == 3)
+		return SDF_LO + 64.0 * (exp(SdfBC4.SampleLevel(LinearClamp, UVW, 0) * log(1.0 + (SDF_HI - SDF_LO) / 64.0)) - 1.0);
+	return SdfFromR16(UVW);
+}
+
+// Up-rez of the 8 m dimensional profile (port of GetUprezzedVoxelCloudDensity from the talk).
+float Uprez(float Dist, float3 P, float Profile, float Type, float DScale)
+{
+	const float3 NP = (P + WindM) * 0.01;		// 100 m per noise tile
+	const float Mip = NoiseMipByDistance ? log2(1.0 + Dist * 0.004) : 0.0;
+	const float4 N = NoiseTex.SampleLevel(LinearWrap, NP, Mip);
+	const float Wispy = lerp(N.r, N.g, Profile);
+	const float Billowy = lerp(N.b * 0.3, N.a * 0.3, pow(Profile, 0.25));
+	float Comp = lerp(Wispy, Billowy, Type);
+	const bool bHF = Detail >= 2 && Dist < 150.0;
+	if (bHF)
+	{
+		const float HHF = saturate(lerp(1.0 - pow(abs(abs(N.g * 2.0 - 1.0) * 2.0 - 1.0), 4.0), pow(abs(abs(N.a * 2.0 - 1.0) * 2.0 - 1.0), 2.0), Type));
+		Comp = lerp(HHF, Comp, ValueRemap(Dist, 50.0, 150.0, 0.9, 1.0));
+	}
+	float D = ValueErosion(Profile, Comp);
+	const float PDS = pow(saturate(DScale), 4.0);
+	D *= PDS;
+	D = pow(D, lerp(0.3, 0.6, max(1e-4, PDS)));
+	if (bHF)
+	{
+		const float F = Frac01(Dist, 50.0, 150.0);
+		D = pow(D, lerp(0.5, 1.0, F)) * lerp(0.666, 1.0, F);
+	}
+	return D;
+}
+
+struct FDens { float Full; float Profile; float Raw; float Zone; };
+
+FDens Density(float Dist, float3 P)
+{
+	FDens R; R.Full = 0; R.Profile = 0; R.Raw = 0; R.Zone = 0;
+	const float4 M = Modeling.SampleLevel(LinearClamp, ToUVW(P), 0);
+	if (M.r <= 0.0) return R;
+	R.Raw = M.r;
+	R.Profile = M.r * M.b;
+	R.Zone = M.a;
+	if (Detail == 0) R.Full = saturate(M.r * 1.6) * M.b;
+	else R.Full = Uprez(Dist, P, M.r, M.g, M.b);
+	R.Full *= ValueRemap(Dist, 4.0, 40.0, 0.25, 1.0);	// thinner right at the camera (the shipped sampler uses 10..120 m; tunnels need opaque walls)
+	if (M.a > 0.5) R.Full *= 1.6;	// the storm cloud is denser
+	return R;
+}
+
+float HG(float C, float G) { const float G2 = G * G; return (1.0 - G2) / (4.0 * PI * pow(max(1.0 + G2 - 2.0 * G * C, 1e-4), 1.5)); }
+
+float Hash12(float2 P) { float3 Q = frac(P.xyx * 0.1031); Q += dot(Q, Q.yzx + 33.33); return frac((Q.x + Q.y) * Q.z); }
+
+float3 Turbo(float X)
+{
+	X = saturate(X);
+	const float4 KR = float4(0.13572138, 4.61539260, -42.66032258, 132.13108234);
+	const float4 KG = float4(0.09140261, 2.19418839, 4.84296658, -14.18503333);
+	const float4 KB = float4(0.10667330, 12.64194608, -60.58204836, 110.36276771);
+	const float2 KR2 = float2(-152.94239396, 59.28637943), KG2 = float2(4.27729857, 2.82956604), KB2 = float2(-89.90310912, 27.34824973);
+	const float4 V4 = float4(1.0, X, X * X, X * X * X);
+	const float2 V2 = V4.zw * V4.z;
+	return float3(dot(V4, KR) + dot(V2, KR2), dot(V4, KG) + dot(V2, KG2), dot(V4, KB) + dot(V2, KB2));
+}
+
+// ---------------------------------------------------------------- 1. light grid
+// For every grid voxel near a cloud, march to the grid boundary toward the sun and toward the sky and store the
+// summed profile density (density x metres). Updated a few Z slices per frame.
+RWTexture3D<float2> RWLightGrid;
+uint SliceStart;
+uint SliceCount;
+
+[numthreads(8, 8, 1)]
+void LightGridCS(uint3 Id : SV_DispatchThreadID)
+{
+	const uint3 C = uint3(Id.xy, Id.z + SliceStart);
+	if (C.x >= 256 || C.y >= 256 || C.z >= 32 || Id.z >= SliceCount) return;
+	const float3 Cell = DomainM / float3(256, 256, 32);
+	const float3 P = (float3(C) + 0.5) * Cell;
+	// every voxel: view samples near a cave wall interpolate between voxels inside and outside the cloud
+	float2 Acc = 0;
+	{
+		float T = Cell.x * 0.5;
+		[loop] for (int I = 0; I < 160; ++I)
+		{
+			const float3 Q = P + SunDir * T;
+			if (any(Q < 0.0) || any(Q > DomainM)) break;
+			const float S = SdfFromR16(ToUVW(Q));
+			const float Step = S > 0.0 ? max(S, 16.0) : 8.0;
+			if (S < 0.0)
+			{
+				const float4 M = Modeling.SampleLevel(LinearClamp, ToUVW(Q), 0);
+				Acc.x += M.r * M.b * Step;
+			}
+			T += Step;
+		}
+		[loop] for (int J = 0; J < 64; ++J)
+		{
+			const float3 Q = P + float3(0, 0, Cell.z * (J + 0.5));
+			if (Q.z > DomainM.z) break;
+			const float4 M = Modeling.SampleLevel(LinearClamp, ToUVW(Q), 0);
+			Acc.y += M.r * M.b * Cell.z;
+		}
+	}
+	RWLightGrid[C] = Acc;
+}
+
+// ---------------------------------------------------------------- 2. ray march
+Texture2D<float> SceneDepth;
+RWTexture2D<float4> RWCloud;
+RWTexture2D<float> RWCloudDepth;
+uint2 LowSize;
+uint ResDiv;
+int2 ViewMin;
+int2 ViewMax;
+float TStartM;
+float TEndM;
+uint LayerTint;				// debug view 4: 1 near, 2 far
+
+float SceneDistanceM(float2 SvPos, float3 DirTW)
+{
+	const float DeviceZ = SceneDepth.Load(int3(SvPos, 0));
+	if (DeviceZ <= 0.0) return 1e7;
+	return ConvertFromDeviceZ(DeviceZ) / max(dot(DirTW, View.ViewForward), 1e-3) * 0.01;
+}
+
+float3 RayDirTW(float2 SvPos)
+{
+	const float3 P = SvPositionToTranslatedWorld(float4(SvPos, 0.5, 1));
+	return normalize(P - View.TranslatedWorldCameraOrigin);
+}
+
+float4 March(float3 O, float3 Dir, float TMaxM, float2 PixelSeed, out float FrontM)
+{
+	FrontM = 1e7;
+	// clip to the domain box
+	float3 SafeDir = Dir;
+	SafeDir.x = abs(SafeDir.x) < 1e-6 ? 1e-6 : SafeDir.x;
+	SafeDir.y = abs(SafeDir.y) < 1e-6 ? 1e-6 : SafeDir.y;
+	SafeDir.z = abs(SafeDir.z) < 1e-6 ? 1e-6 : SafeDir.z;
+	const float3 Inv = 1.0 / SafeDir;
+	const float3 TA = (0.0 - O) * Inv, TB = (DomainM - O) * Inv;
+	const float3 Lo = min(TA, TB), Hi = max(TA, TB);
+	const float A = max(max(max(Lo.x, Lo.y), Lo.z), TStartM);
+	const float B = min(min(min(Hi.x, Hi.y), Hi.z), min(TEndM, TMaxM));
+	if (B <= A) return 0;
+
+	const float CosT = dot(Dir, SunDir);
+	const float Phase = lerp(HG(CosT, 0.6), HG(CosT, -0.2), 0.3);	// forward lobe kept moderate: looking toward the sun through a tunnel must not wash out
+	const float Phase2 = lerp(HG(CosT, 0.35), HG(CosT, -0.1), 0.3);
+	const float JitterA = Hash12(PixelSeed + float2(FrameIndex % 64, (FrameIndex * 7) % 64) * 13.17);
+	const float JitterS = Hash12(PixelSeed);
+	float Tr = 1.0;
+	float3 Col = 0;
+	float DepthSum = 0, WSum = 0;
+	uint Iters = 0, Samples = 0, Over = 0;
+	float T = A;
+	[loop]
+	while (Tr > 0.01 && T < B && Iters < MaxSteps)
+	{
+		++Iters;
+		float3 P = O + Dir * T;
+		float Step = StepMode == 0 ? 3.0 + 60.0 * T / 16384.0 : max(1.0, sqrt(T) * 0.08);
+		bool bSample = true;
+		float Sdf = 0;
+		if (SdfSkip)
+		{
+			Sdf = GetSdf(P);
+			if (DebugView == 5 && SdfFormat != 0 && Sdf > SdfFromR16(ToUVW(P)) + 1.0) ++Over;
+			Step = max(Sdf, Step);
+			bSample = Sdf < 0.0;
+		}
+		// jitter: animated near the camera, static far away (the talk's 250 m switch)
+		P += Dir * (((T < 250.0) ? JitterA : JitterS) * Step);
+		if (bSample)
+		{
+			const FDens D = Density(T, P);
+			if (D.Full > 0.0)
+			{
+				++Samples;
+				const float Sigma = D.Full * EXT * DensityMul;
+				const float Storm = D.Zone > 0.5 ? 0.45 : 1.0;	// darker, rain-laden storm cloud
+				float OD = 0;
+				float AmbOcc = 1;
+				if (LightMode == 0)
+				{
+					[loop] for (int I = 0; I < 10; ++I)
+						OD += Density(T, P + SunDir * (25.6 * (I + 0.5))).Full * 25.6;
+				}
+				else
+				{
+					[unroll] for (int I = 0; I < 2; ++I)
+						OD += Density(T, P + SunDir * (4.0 + 8.0 * I)).Full * 8.0;
+					const float2 G = LightGrid.SampleLevel(LinearClamp, ToUVW(P + SunDir * 16.0), 0);
+					OD += G.x;
+					AmbOcc = AmbientDirectional ? exp(-G.y * EXT * DensityMul * 0.6) : 1.0;
+				}
+				OD *= EXT * DensityMul;
+				const float SunT = exp(-OD);
+				float3 L = SunColor * SunT * Phase;
+				if (MultiScatter)
+				{
+					const float CloudDist = SdfSkip ? Sdf : -64.0;
+					const float MSAtten = ValueRemap(CosT, 0.0, 0.9, 0.25, ValueRemap(CloudDist, -128.0, 0.0, 0.05, 0.25));
+					L += SunColor * D.Profile * exp(-OD * MSAtten / 0.25 * 0.25) * Phase2 * 0.5;
+				}
+				if (Ambient) L += SkyColor * pow(saturate(1.0 - D.Raw), 0.5) * AmbOcc * 0.55;
+				if (Lightning)
+					for (uint F = 0; F < NumFlashes; ++F)
+					{
+						const float Dd = length(P - FlashP[F].xyz);
+						const float Pot = pow(saturate(1.0 - Dd / FlashP[F].w), 3.0);
+						L += float3(0.75, 0.82, 1.0) * 55.0 * FlashI[F].x * Pot * (1.0 - saturate(D.Full * 5.0) * 0.6);
+					}
+				L *= Storm;
+				if (DebugView == 3) L = float3(1, 1, 1) * SunT * 6.0;
+				const float E = exp(-Sigma * Step);
+				Col += Tr * L * (1.0 - E);
+				DepthSum += T * Tr * (1.0 - E); WSum += Tr * (1.0 - E);
+				Tr *= E;
+			}
+		}
+		T += Step;
+	}
+	if (WSum > 0) FrontM = DepthSum / WSum;
+	// the march stops at 1% transmittance: treat that as opaque, or the HDR sun disc shows through thick cloud
+	float Alpha = Tr <= 0.0105 ? 1.0 : 1.0 - Tr;
+	if (Tr <= 0.0105 && WSum > 0) Col /= (1.0 - Tr);
+	if (DebugView == 1) return float4(Turbo(Iters / 1200.0) * 1.1 * View.PreExposure, 1.0);
+	if (DebugView == 2) return float4(Turbo(Samples / 300.0) * 1.1 * View.PreExposure, 1.0);
+	if (DebugView == 5 && Over > 0) Col = lerp(Col, float3(2.4, 0.15, 0.1) * max(Alpha, 0.5), saturate(Over / 3.0) * 0.85);
+	// aerial perspective toward the haze colour
+	const float Haze = 1.0 - exp(-FrontM * 0.001 / HazeKm);
+	Col = lerp(Col, HazeColor * Alpha, Haze);
+	if (DebugView == 4 && Alpha > 0.01) Col *= LayerTint == 1 ? float3(1.6, 0.7, 0.3) : float3(0.4, 0.8, 1.6);
+	return float4(Col * View.PreExposure, Alpha);
+}
+
+[numthreads(8, 8, 1)]
+void MarchCS(uint3 Id : SV_DispatchThreadID)
+{
+	if (any(Id.xy >= LowSize)) return;
+	const float2 SvPos = min(ViewMin + (float2(Id.xy) + 0.5) * ResDiv, ViewMax - 0.5);
+	const float3 Dir = RayDirTW(SvPos);
+	const float TMax = SceneDistanceM(SvPos, Dir);
+	const float3 O = (View.TranslatedWorldCameraOrigin - DomainMinTW) * 0.01;
+	float Front;
+	RWCloud[Id.xy] = March(O, Dir, TMax, float2(Id.xy), Front);
+	RWCloudDepth[Id.xy] = TMax;
+}
+
+// ---------------------------------------------------------------- 3. composite (full resolution)
+Texture2D<float4> NearCloud;
+Texture2D<float> NearDepth;
+Texture2D<float4> FarCloud;
+Texture2D<float> FarDepth;
+uint2 NearSize;
+uint2 FarSize;
+uint NearDiv;
+uint FarDiv;
+uint UseNear;
+
+float4 Upsample(Texture2D<float4> Col, Texture2D<float> Dep, uint2 Size, uint Div, float2 SvPos, float Z)
+{
+	const float2 L = (SvPos - ViewMin) / Div - 0.5;
+	if (Div == 1) return Col.Load(int3(clamp(int2(round(L)), 0, int2(Size) - 1), 0));
+	const int2 B = (int2)floor(L);
+	const float2 F = L - B;
+	const int2 Mx = int2(Size) - 1;
+	float4 Acc = 0;
+	float WSum = 0;
+	// 4x4 taps under a tent of radius 1.5 texels, weighted by how well each tap's scene depth matches this pixel
+	for (int K = 0; K < 16; ++K)
+	{
+		const int2 O = int2(K & 3, K >> 2) - 1;
+		const int2 P = clamp(B + O, 0, Mx);
+		const float2 Dd = abs(float2(O) - F);
+		const float Wb = max(1.5 - Dd.x, 0) * max(1.5 - Dd.y, 0);
+		const float Zi = Dep.Load(int3(P, 0));
+		const float Rel = abs(min(Zi, 1e5) - min(Z, 1e5)) / max(min(Z, 1e5), 1.0);
+		const float W = Wb * exp(-Rel * 30.0) + 1e-5;
+		Acc += Col.Load(int3(P, 0)) * W;
+		WSum += W;
+	}
+	return Acc / WSum;
+}
+
+void CompositePS(float4 SvPosition : SV_POSITION, out float4 OutColor : SV_Target0)
+{
+	const float2 SvPos = SvPosition.xy;
+	const float3 Dir = RayDirTW(SvPos);
+	const float Z = SceneDistanceM(SvPos, Dir);
+	const float4 Far = Upsample(FarCloud, FarDepth, FarSize, FarDiv, SvPos, Z);
+	if (UseNear == 0) { OutColor = Far; return; }
+	const float4 Near = Upsample(NearCloud, NearDepth, NearSize, NearDiv, SvPos, Z);
+	// near layer in front of the far one (both premultiplied)
+	OutColor = float4(Near.rgb + (1.0 - Near.a) * Far.rgb, 1.0 - (1.0 - Near.a) * (1.0 - Far.a));
+}

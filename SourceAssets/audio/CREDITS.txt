@@ -1,0 +1,7 @@
+Sound effects (all CC0, from OpenGameArt.org), trimmed / looped / filtered for this demo:
+- S_Engine.wav  : "racing car engine sound loops" (loop_0.wav), cut from a public-domain car start-up recording; pitched down and low-passed - https://opengameart.org/content/racing-car-engine-sound-loops
+- S_Wind.wav    : "Wind" by ignasd, crossfaded into a seamless loop - https://opengameart.org/content/wind
+- S_ThunderNear : "100 CC0 SFX #2" by rubberduck (sfx100v2_thunder_01) - https://opengameart.org/content/100-cc0-sfx-2
+- S_ThunderFar  : "Rain + Long Thunder" by wuxiascrub, 14 s excerpt, low-passed - https://opengameart.org/content/rain-long-thunder
+- S_Ring.wav    : "Point bell" by haeldb - https://opengameart.org/content/point-bell
+- S_Crash.wav   : "cannon_03" from "25 CC0 bang / firework SFX" mixed with "Crash Collision" by qubodup - https://opengameart.org/content/crash-collision

@@ -1,0 +1,15 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "GameTech-Lab: traversable voxel volumetric clouds in the style of Guerrilla's Nubis3 - voxel cloud modelling, runtime up-rez, SDF ray marching, voxel light grid and two-resolution rendering, as a flight time trial through the clouds.",
+	"Modules": [
+		{ "Name": "CloudLabShaders", "Type": "Runtime", "LoadingPhase": "PostConfigInit" },
+		{ "Name": "CloudLab", "Type": "Runtime", "LoadingPhase": "Default", "AdditionalDependencies": [ "Engine", "UMG" ] }
+	],
+	"Plugins": [
+		{ "Name": "PythonScriptPlugin", "Enabled": true },
+		{ "Name": "EditorScriptingUtilities", "Enabled": true },
+		{ "Name": "ProceduralMeshComponent", "Enabled": true }
+	]
+}

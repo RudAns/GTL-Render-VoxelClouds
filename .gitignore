@@ -1,0 +1,82 @@
+# ===== Unreal Engine 5 project .gitignore =====
+# Template from GameTech-Lab/templates/ue5. Copy to the project root (next to the .uproject).
+
+# --- Generated build output and caches ---
+Binaries/
+Intermediate/
+DerivedDataCache/
+Saved/
+Build/*
+# Keep platform settings that live under Build/ (icons, manifests, etc.)
+!Build/*/
+Build/*/**
+!Build/*/Resources/
+!Build/*/Resources/**
+!Build/*/*.plist
+!Build/*/*.xml
+!Build/*/*.ini
+
+# --- Plugin build output (project plugins under Plugins/) ---
+Plugins/**/Binaries/
+Plugins/**/Intermediate/
+
+# --- IDE / solution files (regenerate via "Generate Visual Studio project files") ---
+*.sln
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+.vs/
+.vscode/
+.idea/
+*.code-workspace
+*.xcodeproj
+*.xcworkspace
+
+# --- Compiled / intermediate files ---
+*.slo
+*.lo
+*.o
+# (*.obj is not ignored: it is also a 3D model format, tracked via LFS. Compiled .obj files live in Intermediate/.)
+*.pch
+*.gch
+*.ipch
+*.pdb
+*.exp
+*.ilk
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
+*.app
+*.target
+*.modules
+*.debug
+*.dSYM
+
+# --- Packaged builds ---
+Packaged/
+Releases/
+Archive/
+*.pak
+*.ucas
+*.utoc
+
+# --- Starter content cache and misc ---
+*.tmp
+*.log
+*.bak
+*~
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# --- Exceptions ---
+# Prebuilt third-party libraries checked in under ThirdParty/ (tracked via LFS)
+!**/ThirdParty/**
+Content/Developers/
+
+# Python bytecode from the asset scripts
+__pycache__/
