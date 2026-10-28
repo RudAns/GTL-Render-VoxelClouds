@@ -1,11 +1,12 @@
 # 自测结果（Tools/iterate.ps1，RTX 3060，1600×900，-benchmark -fps=60）
 # 检查项
-PASS cloudscape built in 3.4 s (shape 459 ms, EDT 252, envelope 317, encode 1839, noise 301); occupancy voxel 0.061 envelope 0.073
+PASS cloudscape built in 3.0 s (shape 411 ms, EDT 179, envelope 266, encode 1602, noise 310); occupancy voxel 0.061 envelope 0.073
 PASS sdf_conservative texels above the true distance: BC1 safe 0, BC4 log 0, BC1 nearest 6405813; mean under-estimate BC1 2.25 m BC4 1.80 m
 PASS tunnel_representation tunnel centre: voxel density 0.000 (19 m to the cloud wall), envelope density 0.982
 PASS rings_in_clear_air 13 of 13 rings have clear air around them
-PASS icing ice 1.00 after 3 s in cloud (density at plane 0.55)
-PASS course_flown autopilot passed 13 of 13 rings, state 3, time 74.9 s, crashes 0
+PASS icing ice 1.00 after 3 s in cloud (density at plane 0.46)
+PASS course_flown autopilot passed 13 of 13 rings, state 3, time 82.9 s, crashes 0, min up.z 0.28 (must stay upright)
+PASS mouse_control mouse up climbs +115 m, right yank turns +94 deg, mouse down dives -39 m; max bank 56 deg, min up.z 0.44, crashes 0
 
 # GPU 耗时：每项取 30 帧平均。机器上同时开着其他程序，数字会随后台负载波动
 PERF start_default light 0.600 near 0.056 far 1.011 composite 0.203 total 1.870 ms

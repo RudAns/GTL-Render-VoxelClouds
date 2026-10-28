@@ -74,6 +74,8 @@ void ACLPlayerController::TickCapture(float Dt)
 		T0 = GetWorld()->GetTimeSeconds();
 		IFileManager::Get().Delete(*FPaths::Combine(CaptureDir, TEXT("results.txt")));
 		IFileManager::Get().Delete(*FPaths::Combine(CaptureDir, TEXT("motion.csv")));
+		IFileManager::Get().Delete(*FPaths::Combine(CaptureDir, TEXT("manual.csv")));
+		IFileManager::Get().Delete(*FPaths::Combine(CaptureDir, TEXT("auto.csv")));
 	}
 	CaptureT = GetWorld()->GetTimeSeconds() - T0;
 	GpuHist.Add(Mg->Gpu);
@@ -188,11 +190,42 @@ void ACLPlayerController::TickCapture(float Dt)
 			{ At(60.f), [](ACLPlayerController* P)
 			{
 				ACLRace* Rc = ACLRace::Get(P);
-				P->Check(Rc->State == ECLRaceState::Finished || Rc->Next >= 10, TEXT("course_flown"), FString::Printf(TEXT("autopilot passed %d of %d rings, state %d, time %.1f s, crashes %d"), Rc->Next, Rc->Rings.Num(), (int32)Rc->State, Rc->RaceSeconds(), Rc->Crashes));
+				const float MinUp = P->Metrics.FindRef(TEXT("auto_minup"));
+				P->Check((Rc->State == ECLRaceState::Finished || Rc->Next >= 10) && MinUp > 0.f, TEXT("course_flown"), FString::Printf(TEXT("autopilot passed %d of %d rings, state %d, time %.1f s, crashes %d, min up.z %.2f (must stay upright)"), Rc->Next, Rc->Rings.Num(), (int32)Rc->State, Rc->RaceSeconds(), Rc->Crashes, MinUp));
+				P->Metrics.Remove(TEXT("auto_t"));
 				P->Shot(TEXT("22_autopilot_end"));
+			} },
+			// a player with the mouse: climb, a hard right yank, a dive, A held down; the plane must follow and never go inverted
+			{ At(0.5f), [](ACLPlayerController* P) { ACLRace* Rc = ACLRace::Get(P); Rc->bCaptureHold = false; Rc->bAutoPilot = false; Rc->Restart(); P->Metrics.Add(TEXT("man_t"), P->CaptureT + 3.5f); } },
+			{ At(16.f), [](ACLPlayerController* P)
+			{
+				const float* Z0 = P->Metrics.Find(TEXT("man_z0")); const float* Z1 = P->Metrics.Find(TEXT("man_z1"));
+				const float* Zd = P->Metrics.Find(TEXT("man_zd")); const float* Z2 = P->Metrics.Find(TEXT("man_z2"));
+				const float Turn = P->Metrics.FindRef(TEXT("man_turn"));
+				const float Bank = P->Metrics.FindRef(TEXT("man_maxbank")), MinUp = P->Metrics.FindRef(TEXT("man_minup"));
+				const bool bClimb = Z0 && Z1 && *Z1 > *Z0 + 20.f, bTurn = Turn > 30.f, bDive = Zd && Z2 && *Z2 < *Zd - 20.f;
+				P->Check(bClimb && bTurn && bDive && Bank < 92.f && MinUp > 0.f && !ACLRace::Get(P)->Crashes, TEXT("mouse_control"),
+					FString::Printf(TEXT("mouse up climbs %+.0f m, right yank turns %+.0f deg, mouse down dives %+.0f m; max bank %.0f deg, min up.z %.2f, crashes %d"),
+						Z0 && Z1 ? *Z1 - *Z0 : 0.f, Turn, Zd && Z2 ? *Z2 - *Zd : 0.f, Bank, MinUp, ACLRace::Get(P)->Crashes));
 			} },
 			{ At(0.5f), [](ACLPlayerController* P) { UKismetSystemLibrary::QuitGame(P, P, EQuitPreference::Quit, false); } },
 		};
+		// -CLQuick: only the mouse-control flight (the last three steps)
+		if (FParse::Param(FCommandLine::Get(), TEXT("CLQuickAuto")))
+		{
+			Script = {
+				{ 0.5f, [](ACLPlayerController* P) { ACLRace* Rc = ACLRace::Get(P); Rc->bCaptureHold = false; Rc->bAutoPilot = true; Rc->Restart(); P->Metrics.Add(TEXT("auto_t"), P->CaptureT); } },
+				{ 90.f, [](ACLPlayerController* P) { ACLRace* Rc = ACLRace::Get(P); P->Check(Rc->State == ECLRaceState::Finished && P->Metrics.FindRef(TEXT("auto_minup")) > 0.f, TEXT("course_flown"), FString::Printf(TEXT("autopilot %d of %d rings, state %d, %.1f s, crashes %d, min up.z %.2f"), Rc->Next, Rc->Rings.Num(), (int32)Rc->State, Rc->RaceSeconds(), Rc->Crashes, P->Metrics.FindRef(TEXT("auto_minup")))); } },
+				{ 90.5f, [](ACLPlayerController* P) { UKismetSystemLibrary::QuitGame(P, P, EQuitPreference::Quit, false); } },
+			};
+		}
+		else if (FParse::Param(FCommandLine::Get(), TEXT("CLQuick")))
+		{
+			const int32 N = Script.Num();
+			const float Shift = Script[N - 3].At - 0.5f;
+			Script.RemoveAt(0, N - 3);
+			for (FStep& St : Script) St.At -= Shift;
+		}
 	}
 	// motion record while the autopilot flies through the tunnel cloud: per-frame plane screen position and camera
 	// path (to measure judder), plus a short run of frame dumps for visual review
@@ -200,6 +233,16 @@ void ACLPlayerController::TickCapture(float Dt)
 	{
 		const float Rel = CaptureT - *AutoT;
 		static int32 Frame = 0;
+		if (Rel > 4.f && GetPlane())
+		{
+			if (!Metrics.Contains(TEXT("auto_minup"))) Metrics.Add(TEXT("auto_minup"), 1.f);
+			Metrics[TEXT("auto_minup")] = FMath::Min(Metrics[TEXT("auto_minup")], GetPlane()->GetActorUpVector().Z);
+			ACLPlane* Pa = GetPlane(); ACLRace* Ra = ACLRace::Get(this);
+			const FRotator R = Pa->GetActorRotation();
+			const float Bank = -FMath::RadiansToDegrees(FMath::Atan2(Pa->GetActorRightVector().Z, Pa->GetActorUpVector().Z));
+			const FString Line = FString::Printf(TEXT("%.3f,%d,%.1f,%.1f,%.1f,%.1f,%.1f,%.0f,%d\n"), Rel, Ra->Next, Pa->Aim.Yaw, Pa->Aim.Pitch, R.Yaw, R.Pitch, Bank, Pa->GetActorLocation().Z * 0.01f, (int32)Ra->State);
+			FFileHelper::SaveStringToFile(Line, *FPaths::Combine(CaptureDir, TEXT("auto.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM, &IFileManager::Get(), FILEWRITE_Append);
+		}
 		if (Rel > 8.f && Rel < 12.f)
 		{
 			ACLPlane* Pl = GetPlane();
@@ -210,6 +253,40 @@ void ACLPlayerController::TickCapture(float Dt)
 			FFileHelper::SaveStringToFile(Line, *FPaths::Combine(CaptureDir, TEXT("motion.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM, &IFileManager::Get(), FILEWRITE_Append);
 			if (Frame < 48 && FParse::Param(FCommandLine::Get(), TEXT("CLFrames"))) Shot(FString::Printf(TEXT("frames/f_%03d"), Frame));
 			++Frame;
+		}
+	}
+	if (const float* ManT = Metrics.Find(TEXT("man_t")))
+	{
+		// scripted mouse deltas per frame (the units a real mouse sends), sampled at fixed times
+		const float Rel = CaptureT - *ManT;
+		ACLPlane* Pl = GetPlane();
+		if (Rel >= 0.f && Rel < 12.f && Pl)
+		{
+			const float Alt = Pl->GetActorLocation().Z * 0.01f;
+			if (Rel < 2.0f) OnLookUp(3.f);					// mouse up: climb
+			else if (Rel > 3.5f && Rel < 5.5f) OnTurn(14.f);	// hard right yank
+			else if (Rel > 7.5f && Rel < 9.5f) OnLookUp(-4.f);	// mouse down: dive
+			if (Rel > 9.5f && Rel < 11.f) Pl->RollInput = -1.f;	// A held after the dive
+			auto Mark = [this](const TCHAR* K, float V) { if (!Metrics.Contains(K)) Metrics.Add(K, V); };
+			if (Rel > 0.f) Mark(TEXT("man_z0"), Alt);
+			if (Rel > 3.4f) Mark(TEXT("man_z1"), Alt);
+			if (Rel > 7.5f) Mark(TEXT("man_zd"), Alt);
+			if (Rel > 10.5f) Mark(TEXT("man_z2"), Alt);
+			// unwrapped heading change during the right yank
+			static float LastYaw = 0.f;
+			const float Yaw = Pl->GetActorRotation().Yaw;
+			if (Rel > 3.4f && Rel < 7.5f) Metrics.FindOrAdd(TEXT("man_turn")) += FRotator::NormalizeAxis(Yaw - LastYaw);
+			LastYaw = Yaw;
+			const float Bank = -FMath::RadiansToDegrees(FMath::Atan2(Pl->GetActorRightVector().Z, Pl->GetActorUpVector().Z));	// + = right wing down
+			Metrics.FindOrAdd(TEXT("man_maxbank")) = FMath::Max(Metrics.FindRef(TEXT("man_maxbank")), FMath::Abs(Bank));
+			if (!Metrics.Contains(TEXT("man_minup"))) Metrics.Add(TEXT("man_minup"), 1.f);
+			Metrics[TEXT("man_minup")] = FMath::Min(Metrics[TEXT("man_minup")], Pl->GetActorUpVector().Z);
+			{
+				const FRotator R = Pl->GetActorRotation();
+				const FString Line = FString::Printf(TEXT("%.3f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.0f\n"), Rel, Pl->Aim.Yaw, Pl->Aim.Pitch, R.Yaw, R.Pitch, Bank, Pl->GetActorUpVector().Z * 100.f, Alt);
+				FFileHelper::SaveStringToFile(Line, *FPaths::Combine(CaptureDir, TEXT("manual.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM, &IFileManager::Get(), FILEWRITE_Append);
+			}
+			if (FMath::Fmod(Rel, 1.5f) < Dt) Shot(FString::Printf(TEXT("m_%02d"), FMath::FloorToInt(Rel / 1.5f)));
 		}
 	}
 	if (const float* PerfT = Metrics.Find(TEXT("perf_t")))

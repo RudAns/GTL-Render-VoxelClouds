@@ -200,6 +200,10 @@ void ACLRace::Tick(float Dt)
 			const float MaxStep = 120.f * Dt;
 			Pl->Aim = (Ang <= MaxStep ? Want : FQuat::Slerp(From, Want, MaxStep / Ang)).Rotator();
 			Pl->Aim.Roll = 0.f;
+			// the same limits the mouse has
+			const float PlaneYaw = Pl->GetActorRotation().Yaw;
+			Pl->Aim.Pitch = FMath::Clamp(Pl->Aim.Pitch, -40.f, 40.f);
+			Pl->Aim.Yaw = PlaneYaw + FMath::Clamp(FRotator::NormalizeAxis(Pl->Aim.Yaw - PlaneYaw), -75.f, 75.f);
 		}
 		// ring passing: the segment flown this frame crosses the ring's plane inside its radius
 		if (Rings.IsValidIndex(Next))

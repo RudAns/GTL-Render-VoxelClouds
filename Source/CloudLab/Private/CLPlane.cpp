@@ -356,28 +356,37 @@ void ACLPlane::Fly(float Dt)
 
 	// steering toward the aim direction: bank into the turn, pull the nose up in the body frame
 	const FVector AimDir = Aim.Vector();
-	const FVector L = Orient.UnrotateVector(AimDir);
-	const float ErrPitch = FMath::RadiansToDegrees(FMath::Atan2(L.Z, FMath::Max(L.X, 0.05f)));
-	const float ErrYaw = FMath::RadiansToDegrees(FMath::Atan2(L.Y, FMath::Max(L.X, 0.05f)));
 	// world-frame heading error decides the bank angle
 	const FVector Fwd = Orient.GetForwardVector();
 	const FVector FlatF = FVector(Fwd.X, Fwd.Y, 0).GetSafeNormal(), FlatA = FVector(AimDir.X, AimDir.Y, 0).GetSafeNormal();
 	const float Heading = FMath::RadiansToDegrees(FMath::Atan2(FVector::CrossProduct(FlatF, FlatA).Z, FVector::DotProduct(FlatF, FlatA)));
 	const float Roll = FMath::RadiansToDegrees(FMath::Atan2(Orient.GetRightVector().Z, Orient.GetUpVector().Z));	// positive = right wing down... computed below
-	const float WantBank = FMath::Clamp(Heading * 2.0f, -78.f, 78.f) + RollInput * 70.f;
+	// A/D adds bank, but the total never passes 85 degrees: the plane always rolls back toward upright
+	// Steep climbs and dives bank less: there the pitch rate itself rolls the plane further over.
+	const float BankMax = 70.f * (1.f - 0.5f * FMath::Abs(Fwd.Z));
+	const float WantBank = FMath::Clamp(FMath::Clamp(Heading * 2.0f, -BankMax, BankMax) + RollInput * 40.f, -85.f, 85.f);
 	const float CurBank = -Roll;
 	const float Ctrl = (bStalled ? 0.35f : 1.f) * FMath::Lerp(1.f, 0.6f, Ice);
 	FVector Want;
-	Want.X = FMath::Clamp((WantBank - CurBank) * 3.5f, -170.f, 170.f) * Ctrl;	// roll rate
-	Want.Y = FMath::Clamp(ErrPitch * 3.0f, -75.f, 75.f) * Ctrl;					// pitch rate (nose up positive)
-	Want.Z = FMath::Clamp(ErrYaw * 1.6f, -28.f, 28.f) * Ctrl;					// yaw rate
-	if (bStalled) Want.Y = -28.f;	// iced up: the nose drops
+	Want.X = FMath::Clamp((WantBank - CurBank) * 5.0f, -220.f, 220.f) * Ctrl;	// roll rate
+	// Mouse-aim flight control: the bank angle sets a coordinated turn rate (g·tan(bank)/v), and the
+	// difference between the aim's pitch and the plane's pitch sets a climb or descent rate. Both are
+	// world-frame demands, converted to body pitch and yaw rates for the current bank.
+	const float PitchDeg = FMath::RadiansToDegrees(FMath::Asin(FMath::Clamp(Fwd.Z, -1.f, 1.f)));
+	const float Phi = FMath::DegreesToRadians(FMath::Clamp(CurBank, -80.f, 80.f));
+	const float TurnRate = FMath::RadiansToDegrees(1.5f * 9.81f * FMath::Tan(Phi) / FMath::Max(SpeedMs, 30.f));	// deg/s, + = right
+	float ClimbRate = FMath::Clamp((Aim.Pitch - PitchDeg) * 3.f, -45.f, 45.f);
+	if (bStalled) ClimbRate = FMath::Clamp((-30.f - PitchDeg) * 2.f, -28.f, 28.f);	// iced up: the nose drops to a 30 degree glide
+	const float Trim = FMath::Clamp(Heading * 0.8f, -10.f, 10.f);	// small heading corrections without banking
+	Want.Y = FMath::Clamp(TurnRate * FMath::Sin(Phi) + ClimbRate * FMath::Cos(Phi), -60.f, 60.f) * Ctrl;			// body pitch rate, nose up +
+	Want.Z = FMath::Clamp((TurnRate + Trim) * FMath::Cos(Phi) - ClimbRate * FMath::Sin(Phi), -60.f, 60.f) * Ctrl;	// body yaw rate, right +
 	if (ShockT > 0.f) { const float Tm = GetWorld()->GetTimeSeconds(); Want += FVector(FMath::Sin(Tm * 37.f) * 90.f, FMath::Sin(Tm * 23.f) * 25.f, 0.f) * (ShockT / 1.4f); }
 	// turbulence inside clouds
 	Turb = FMath::Lerp(Turb, CloudDensity, 1.f - FMath::Exp(-3.f * Dt));
 	if (Turb > 0.02f) { const float Tm = GetWorld()->GetTimeSeconds(); Want += FVector(FMath::Sin(Tm * 5.1f) * 14.f, FMath::Sin(Tm * 6.7f + 1.f) * 6.f, FMath::Sin(Tm * 4.3f) * 3.f) * FMath::Min(Turb * 2.f, 1.f); }
 	AngVel = FMath::Lerp(AngVel, Want, 1.f - FMath::Exp(-7.f * Dt));
-	const FQuat DRoll(FVector::ForwardVector, FMath::DegreesToRadians(AngVel.X * Dt));
+	// positive roll rate = right wing down; FQuat turns +Y toward +Z for a positive angle, so negate
+	const FQuat DRoll(FVector::ForwardVector, FMath::DegreesToRadians(-AngVel.X * Dt));
 	const FQuat DPitch(FVector::RightVector, FMath::DegreesToRadians(-AngVel.Y * Dt));
 	const FQuat DYaw(FVector::UpVector, FMath::DegreesToRadians(AngVel.Z * Dt));
 	Orient = (Orient * DYaw * DPitch * DRoll).GetNormalized();

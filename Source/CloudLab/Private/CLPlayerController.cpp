@@ -48,8 +48,9 @@ void ACLPlayerController::SetupInputComponent()
 	InputComponent->BindAxisKey(EKeys::MouseY, this, &ACLPlayerController::OnLookUp);
 }
 
-void ACLPlayerController::OnTurn(float V) { if (!bPanel) AimYaw += V * 0.45f; }
-void ACLPlayerController::OnLookUp(float V) { if (!bPanel) AimPitch = FMath::Clamp(AimPitch - V * 0.45f, -80.f, 80.f); }
+// mouse aim: moving the mouse up aims up (not the inverted flight-stick convention)
+void ACLPlayerController::OnTurn(float V) { if (!bPanel) AimYaw += V * 0.3f; }
+void ACLPlayerController::OnLookUp(float V) { if (!bPanel) AimPitch = FMath::Clamp(AimPitch + V * 0.3f, -40.f, 40.f); }
 
 void ACLPlayerController::OnCycleView()
 {
@@ -81,7 +82,13 @@ void ACLPlayerController::PlayerTick(float Dt)
 		if (!bAimInit || P->bFrozen) { AimYaw = P->Aim.Yaw; AimPitch = P->Aim.Pitch; bAimInit = true; }
 		ACLRace* R = ACLRace::Get(this);
 		const bool bAuto = R && R->bAutoPilot;
-		if (!bAuto && !P->bFrozen) P->Aim = FRotator(AimPitch, AimYaw, 0);
+		if (!bAuto && !P->bFrozen)
+		{
+			// keep the aim within 75 degrees of where the plane is heading, so it never ends up behind the plane
+			const float PlaneYaw = P->GetActorRotation().Yaw;
+			AimYaw = PlaneYaw + FMath::Clamp(FRotator::NormalizeAxis(AimYaw - PlaneYaw), -75.f, 75.f);
+			P->Aim = FRotator(AimPitch, AimYaw, 0);
+		}
 		if (bAuto) { AimYaw = P->Aim.Yaw; AimPitch = P->Aim.Pitch; }
 		P->ThrottleInput = bPanel ? 0.f : (IsInputKeyDown(EKeys::W) ? 1.f : 0.f) - (IsInputKeyDown(EKeys::S) ? 1.f : 0.f);
 		P->RollInput = bPanel ? 0.f : (IsInputKeyDown(EKeys::D) ? 1.f : 0.f) - (IsInputKeyDown(EKeys::A) ? 1.f : 0.f);
