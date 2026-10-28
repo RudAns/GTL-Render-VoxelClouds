@@ -80,3 +80,6 @@ Content/Developers/
 
 # Python bytecode from the asset scripts
 __pycache__/
+
+# Local research and working files
+_internal/

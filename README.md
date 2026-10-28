@@ -1,8 +1,23 @@
+<div align="center">
+
 # 可穿越的体素体积云
 
-从 Guerrilla 在 SIGGRAPH 2023 上分享的 Nubis³（《地平线：西之绝境》资料片《燃烧海岸》的体积云系统）到 UE5：整片云景存成一张 8 m 一格的三维体素网格，飞机可以钻进隧道云、飞进云洞、从雷暴云的巢穴里穿出去。技术调研加上 UE 5.8 中可以操作的飞行竞速复现。
+**三维体素建模 · 噪声细节提升 · SDF 跳空 · 保守块压缩 · 光照网格 · 两档分辨率**<br>
+Guerrilla Nubis³（《地平线：西之绝境》资料片《燃烧海岸》，SIGGRAPH 2023）的体积云系统：技术调研 + UE 5.8 可以钻进隧道云的飞行竞速复现
+
+<a href="LICENSE"><img alt="license MIT" src="https://img.shields.io/badge/license-MIT-0a7bbb"></a>
+<img alt="引擎 UE 5.8" src="https://img.shields.io/badge/%E5%BC%95%E6%93%8E-UE_5.8-313131?logo=unrealengine">
+<img alt="代码 C++ · HLSL" src="https://img.shields.io/badge/%E4%BB%A3%E7%A0%81-C%2B%2B_%C2%B7_HLSL-00599c">
+<a href="Docs/Research.html"><img alt="调研 26 篇文献" src="https://img.shields.io/badge/%E8%B0%83%E7%A0%94-26_%E7%AF%87%E6%96%87%E7%8C%AE-e05d44"></a>
+<img alt="渲染 RDG 计算着色器" src="https://img.shields.io/badge/%E6%B8%B2%E6%9F%93-RDG_%E8%AE%A1%E7%AE%97%E7%9D%80%E8%89%B2%E5%99%A8-8a2be2">
+
+[📥 下载调研报告](https://github.com/RudAns/GTL-Render-VoxelClouds/releases/latest/download/Research.html) · [📥 下载落地文档](https://github.com/RudAns/GTL-Render-VoxelClouds/releases/latest/download/Implementation.html)
+
+<br>
 
 [![调研报告封面](Docs/shots/00_research_cover.png)](Docs/Research.html)
+
+</div>
 
 ## 调研报告
 
@@ -14,6 +29,12 @@
 - 光线步进在云外按到最近云的距离（SDF）跳步，在云内按随距离增大的自适应步长采样；太阳光的大部分采样改为查询 256×256×32 的预计算累积密度网格，分 8 帧更新。
 - 60 Hz 模式按 200 m 把步进拆成两档分辨率，讲座给出的 PS5 开销为 2.2 至 4 ms。
 - 报告在 RTX 3060 上复核了这些数字，并发现讲座的 BC1 565 拆分编码在不同厂商的解码器上会让距离“变大”、导致跳步越过云。按各厂商解码结果的上界编码才能保证永不越界；BC4 加对数映射在同等显存下更准。
+
+## 技术落地文档
+
+**[Docs/Implementation.html](Docs/Implementation.html)**：按数据流顺序整理建模纹理的四个通道、精确距离变换、BC1 565 拆分与 BC4 对数的保守编码（按各厂商解码结果的上界）、噪声细节提升、SDF 跳空的光线步进、光照网格、两档分辨率与深度感知合成、接入 UE 渲染管线的做法和 UE 体积云对照路线，附关键常数、坑点清单和移植清单，示意图内嵌，可以直接对照源码搬进自己的项目。
+
+> 提示：如需在自己的项目中使用，可以把本工程的源码和这份 HTML 一起交给 AI 编程助手，让它参照文档把需要的部分接入你的工程。
 
 ## UE 5.8 可交互 Demo
 
